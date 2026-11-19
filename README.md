@@ -2,7 +2,9 @@
 
 CS5298 Blockchain and Web3.0 Security — Final Project, Direction 3 (Verifiable Indexer)
 
+Group: **Final Project Group 10**
 Author: **Jia Wenrui** · Student ID: **60851180**
+Author: **Li Muen** · Student ID: **60659117**
 
 ---
 
