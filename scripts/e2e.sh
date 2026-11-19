@@ -18,18 +18,43 @@ expect() {
 }
 number() { printf '%s\n' "${1%% *}"; }
 
+# Wait for a sequenced write to become visible on the queried node.
+wait_for_number() {
+    local expected=$1 node=$2 signature=$3
+    shift 3
+    local deadline=$((SECONDS + 60)) output final_line
+    while true; do
+        if output=$(read_node "$node" "$signature" "$@" 2>&1); then
+            final_line=$(printf '%s\n' "$output" | tail -n 1)
+            if [[ $(number "$final_line") == "$expected" ]]; then
+                return 0
+            fi
+        fi
+        if (( SECONDS >= deadline )); then
+            printf 'Node %s did not report %s for %s. Last response: %s\n' \
+                "$((node + 1))" "$expected" "$signature" "$output" >&2
+            return 1
+        fi
+        sleep 1
+    done
+}
+
 send 'configure_indexers(bytes32[],uint64)' "[$2,$4,$6,$8]" 4
 for i in {0..11}; do
     send 'ingest(address,uint64,uint8)' "$account" "$((11+i))" "$((i%2))"
 done
 for node in {0..3}; do
     read_node "$node" 'build_index()(uint64)' >/dev/null
-    expect "$(number "$(read_node "$node" 'index_cursor()(uint64)')")" 12
+    wait_for_number 12 "$node" 'index_cursor()(uint64)'
 done
 for window in {0..2}; do
     output=$(read_node 0 'local_window_root(uint64)(bytes32,uint64)' "$window")
     expect "$(number "${output#*$'\n'}")" 4
     send 'seal_window(uint64,bytes32,uint64)' "$window" "${output%%$'\n'*}" 4
+done
+
+for node in {0..3}; do
+    wait_for_number 3 "$node" 'commitment_head()(bytes32,uint64)'
 done
 
 output=$(read_node 0 'historical_balance(address,uint64)(uint64,uint64,uint64)' "$account" 0)
@@ -70,7 +95,7 @@ expect "$(read_node 0 "$verify" 5 "$account" 17 1 "$path")" false
 
 head=$(read_node 0 'commitment_head()')
 send 'dispute(uint64,bytes32)' 2 "0x$(printf '%064d' 0)"
-expect "$(number "$(read_node 0 'dispute_count(uint64)(uint64)' 2)")" 1
+wait_for_number 1 0 'dispute_count(uint64)(uint64)' 2
 expect "$(number "$(read_node 0 'dispute_count(uint64)(uint64)' 1)")" 0
 expect "$(read_node 0 'commitment_head()')" "$head"
 echo 'PASS: historical totals, UPC divergence, anchored proof and dispute'

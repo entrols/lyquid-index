@@ -84,6 +84,26 @@ extra-event inclusion.
 
 ### Devnet end-to-end
 
+For the automated two-run reproduction, start the four-node native devnet
+(`bash <ldk>/scripts/localnet.sh multi`) in a separate terminal. With
+`shaker`, `cast`, `curl`, and Python 3 available, run:
+
+```bash
+bash scripts/reproduce-twice.sh
+```
+
+The runner discovers the four local nodes, deploys a fresh contract for each
+run, and waits for each node to serve the new contract before sending test
+transactions. The end-to-end script waits for index and checkpoint updates
+before asserting values. Each run writes its deployment and test logs to a
+new `docs/reproduction-twice.*` directory. The final check requires separate
+contract addresses and identical end-to-end output. It uses the public default
+Anvil devnet key unless `PRIVATE_KEY` is set.
+
+For a single manual run, use the steps below. Wait until each node can call
+`commitment_head()` on the fresh contract before starting the script.
+
+
 ```bash
 # four nodes, shared anvil; no Docker required
 bash <ldk>/scripts/localnet.sh multi
