@@ -1,0 +1,84 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling typenum v1.20.1
+   Compiling cfg-if v1.0.5
+   Compiling equivalent v1.0.3
+   Compiling dunce v1.0.5
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling hybrid-array v0.4.15
+   Compiling paste v1.0.15
+   Compiling convert_case v0.10.0
+   Compiling keccak v0.2.2
+   Compiling cc v1.11.2
+   Compiling serde v1.0.229
+   Compiling const-oid v0.10.3
+   Compiling thiserror v2.0.21
+   Compiling ruint v1.21.1
+   Compiling cpufeatures v0.3.1
+   Compiling itoa v1.0.19
+   Compiling foldhash v0.2.0
+   Compiling bs58 v0.5.1
+   Compiling version_check v0.9.5
+   Compiling constant_time_eq v0.4.2
+   Compiling zerocopy v0.8.63
+   Compiling arrayvec v0.7.8
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling zmij v1.0.23
+   Compiling scopeguard v1.2.0
+   Compiling base32 v0.5.1
+   Compiling ahash v0.8.12
+   Compiling lock_api v0.4.14
+   Compiling serde_json v1.0.154
+   Compiling allocator-api2 v0.4.0
+   Compiling once_cell v1.21.4
+   Compiling syn v2.0.119
+   Compiling syn v3.0.10
+   Compiling digest v0.11.3
+   Compiling talc v5.1.1
+   Compiling sha3 v0.11.0
+   Compiling sha2 v0.11.1
+   Compiling lyquid-index v0.1.0 (/mnt/e/CityuStudy/blockchain/project/lyquid-index)
+   Compiling memchr v2.8.3
+   Compiling const-hex v1.19.3
+   Compiling hashbrown v0.17.1
+   Compiling proc-macro-error-attr3 v3.0.1
+   Compiling cb58 v0.0.3
+   Compiling blake3 v1.8.7
+   Compiling indexmap v2.14.2
+   Compiling macro-string v0.2.0
+   Compiling syn-solidity v1.7.3
+   Compiling proc-macro-error3 v3.0.1
+   Compiling serde_derive v1.0.229
+   Compiling thiserror-impl v2.0.21
+   Compiling derive_more-impl v2.1.1
+   Compiling typed-builder-macro v0.23.2
+   Compiling alloy-sol-macro-input v1.7.3
+   Compiling alloy-sol-macro-expander v1.7.3
+   Compiling cobs v0.3.0
+   Compiling typed-builder v0.23.2
+   Compiling bytes v1.12.1
+   Compiling postcard v1.1.3
+   Compiling alloy-sol-macro v1.7.3
+   Compiling derive_more v2.1.1
+   Compiling alloy-primitives v1.7.3
+   Compiling alloy-sol-types v1.7.3
+   Compiling lyquor-primitives v0.8.4
+   Compiling lyquid-proc v0.8.4
+   Compiling lyquid v0.8.4
+warning: unstable feature specified for `-Ctarget-feature`: `atomics`
+  |
+  = note: this feature is not stably supported; its behavior can change in the future
+
+warning: `lyquid-index` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 33.91s
+2026-11-19T12:26:54.995252Z  INFO ThreadId(01) shaker::build: Built lyquid-index with LDK 0.8.4
+2026-11-19T12:26:55.332646Z  INFO ThreadId(01) shaker: Pushed image hash sha256:661b7b19348183daadeac018b740f2648bfdadebaaacf5a9ed6ce56f232c4938 to http://127.0.0.1:10087/lyquids:lyquid-index
+2026-11-19T12:26:55.332667Z  INFO ThreadId(01) shaker: Deploying from pinned OCI reference http://127.0.0.1:10087/lyquids@sha256:661b7b19348183daadeac018b740f2648bfdadebaaacf5a9ed6ce56f232c4938
+2026-11-19T12:26:55.620042Z  INFO ThreadId(01) shaker::deploy: lyquid-index.image_hash = sha256:661b7b19348183daadeac018b740f2648bfdadebaaacf5a9ed6ce56f232c4938
+2026-11-19T12:26:55.620088Z  INFO ThreadId(01) shaker::deploy: lyquid-index.os_version = 0.8
+2026-11-19T12:26:55.620100Z  INFO ThreadId(01) shaker::deploy: lyquid-index.input = 0000000000000000000000009fe46736679d2d9a65f0992f2272de9f3c7fa6e00000000000000000000000000000000000000000000000000000000000000000661b7b19348183daadeac018b740f2648bfdadebaaacf5a9ed6ce56f232c493800000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000025687474703a2f2f3132372e302e302e313a31303038372f6c7971756964733a6c61746573740000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+2026-11-19T12:26:55.631548Z  INFO ThreadId(01) shaker::deploy: lyquid-index.address = 0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9
+2026-11-19T12:26:55.740869Z  INFO ThreadId(01) shaker::deploy: lyquid-index.lyquid_id = Lyquid-ahjg4huwvban3bvhxue7rcbaw4mnltwyolhqa
+{"contract":"0xcf7ed3acca5a467e9e704c703e8d87f634fb0fc9","lyquid_id":"Lyquid-ahjg4huwvban3bvhxue7rcbaw4mnltwyolhqa","os_version":"0.8"}
+2026-11-19T12:26:55.740989Z  INFO ThreadId(01) shaker: created Lyquid-ahjg4huwvban3bvhxue7rcbaw4mnltwyolhqa => 0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9

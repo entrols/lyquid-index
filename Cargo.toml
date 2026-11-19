@@ -1,0 +1,24 @@
+[package]
+name = "lyquid-index"
+publish = false
+version = "0.1.0"
+edition = "2024"
+authors = ["Jia Wenrui <60851180@cityu.edu.hk>"]
+description = "LyquidIndex: verifiable on-chain/off-chain split index with UPC-checked consensus"
+
+[dependencies]
+lyquid = { version = "0.8.4", features = ["ldk"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+lyquid-test = { version = "0.8.4" }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+strip = "debuginfo"
+debug = false
+
+[workspace]
