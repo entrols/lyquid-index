@@ -69,6 +69,102 @@ pub struct AccountAgg {
     pub last_seq: u64,
 }
 
+// Historical features derived over a bounded, sealed window range.
+//
+// All fields are unsigned so the value is ABI-friendly. Consumers can derive net flow as
+// `inflow - outflow` (when positive) or `outflow - inflow` (when negative).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FlowFeatures {
+    pub inflow: u64,
+    pub outflow: u64,
+    pub count: u64,
+    pub active_windows: u64,
+    pub peak_window_outflow: u64,
+}
+
+// One node's recomputation of a bounded historical feature query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureAnswer {
+    pub responder: NodeID,
+    pub first_window: u64,
+    pub last_window: u64,
+    // Commitment-chain root at `last_window`, binding the report to that history prefix.
+    pub end_chain_root: B256,
+    pub features: FlowFeatures,
+    pub tampered: bool,
+    pub agreeing: u32,
+    pub total: u32,
+    pub divergent: String,
+}
+
+impl Default for FeatureAnswer {
+    fn default() -> Self {
+        Self {
+            responder: NodeID::from([0u8; 32]),
+            first_window: 0,
+            last_window: 0,
+            end_chain_root: B256::ZERO,
+            features: FlowFeatures::default(),
+            tampered: false,
+            agreeing: 0,
+            total: 0,
+            divergent: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FeatureTally {
+    expected: u32,
+    answers: Vec<FeatureAnswer>,
+    failed: Vec<NodeID>,
+}
+
+impl FeatureTally {
+    fn new(expected: u32) -> Self {
+        Self {
+            expected,
+            answers: Vec::new(),
+            failed: Vec::new(),
+        }
+    }
+
+    fn ready(&self) -> bool {
+        self.expected > 0 && self.answers.len() + self.failed.len() >= self.expected as usize
+    }
+
+    fn verdict(&self) -> FeatureAnswer {
+        let key = |a: &FeatureAnswer| (a.first_window, a.last_window, a.end_chain_root, a.features);
+        let mut votes = std::collections::BTreeMap::new();
+        for answer in &self.answers {
+            *votes.entry(key(answer)).or_insert(0u32) += 1;
+        }
+        let winner = votes.into_iter().max_by_key(|(_, count)| *count);
+        let agreeing = winner.as_ref().map_or(0, |(_, count)| *count);
+        let majority = winner.filter(|(_, count)| *count > self.expected / 2);
+        let mut divergent: Vec<_> = self.failed.iter().map(ToString::to_string).collect();
+        for answer in &self.answers {
+            if majority.as_ref().map(|(winner, _)| *winner) != Some(key(answer)) {
+                divergent.push(answer.responder.to_string());
+            }
+        }
+        divergent.sort();
+        let (first_window, last_window, end_chain_root, features) =
+            majority.map(|(winner, _)| winner).unwrap_or_default();
+        FeatureAnswer {
+            first_window,
+            last_window,
+            end_chain_root,
+            features,
+            agreeing,
+            total: self.expected,
+            tampered: !divergent.is_empty(),
+            divergent: divergent.join(","),
+            ..FeatureAnswer::default()
+        }
+    }
+}
+
 // On-chain commitment for one window.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct WindowCommit {
@@ -217,10 +313,14 @@ state! {
     // ---- Off-chain (per-node) state: the actual index. ----
     instance cursor: u64 = 0;
     instance agg: HashMap<Address, AccountAgg> = new_hashmap();
+    // Per-account aggregates per window are private, derived state. They make bounded
+    // historical feature queries cheap without adding secondary-index data to consensus.
+    instance window_agg: HashMap<u64, HashMap<Address, AccountAgg>> = new_hashmap();
     instance leaves: HashMap<u64, Vec<B256>> = new_hashmap();
     instance built_windows: u64 = 0;
     instance mismatches: Vec<String> = Vec::new();
     instance tamper_amount: u64 = 0;
+    instance feature_tamper_amount: u64 = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +487,7 @@ fn build_index(ctx: &mut _) -> LyquidResult<u64> {
     let mut built = *ctx.instance.built_windows.read();
     {
         let mut agg = ctx.instance.agg.write();
+        let mut window_agg = ctx.instance.window_agg.write();
         let mut leaves = ctx.instance.leaves.write();
 
         while cursor < event_count {
@@ -405,6 +506,19 @@ fn build_index(ctx: &mut _) -> LyquidResult<u64> {
             }
             entry.count += 1;
             entry.last_seq = seq;
+
+            let window_entry = window_agg
+                .entry(window_id)
+                .or_default()
+                .entry(event.account)
+                .or_default();
+            if event.kind == 0 {
+                window_entry.inflow = window_entry.inflow.saturating_add(event.amount);
+            } else {
+                window_entry.outflow = window_entry.outflow.saturating_add(event.amount);
+            }
+            window_entry.count += 1;
+            window_entry.last_seq = seq;
 
             cursor += 1;
         }
@@ -466,6 +580,44 @@ fn historical_balance(ctx: &_, account: Address, window_id: u64) -> LyquidResult
     )
     .ok_or_else(|| LyquidError::LyquidRuntime("sealed window is incomplete".into()))?;
     Ok(fold_account(&ctx.network.events[..end], account))
+}
+
+// Returns historical features over an inclusive range of sealed windows from this node's
+// private secondary index. The range is intentionally bounded: an unsealed suffix is never
+// presented as trustworthy history.
+#[method::instance(export = eth)]
+fn flow_features(
+    ctx: &_,
+    account: Address,
+    first_window: u64,
+    last_window: u64,
+) -> LyquidResult<(u64, u64, u64, u64, u64)> {
+    let end = feature_range_end(
+        *ctx.network.window_size,
+        first_window,
+        last_window,
+        &ctx.network.commits,
+        ctx.network.events.len(),
+    )
+    .ok_or_else(|| LyquidError::LyquidRuntime("range must contain sealed windows".into()))?;
+    if *ctx.instance.cursor.read() < end as u64 {
+        return Err(LyquidError::LyquidRuntime(
+            "local index is behind the requested range".into(),
+        ));
+    }
+    let features = features_from_windows(
+        &ctx.instance.window_agg.read(),
+        account,
+        first_window,
+        last_window,
+    );
+    Ok((
+        features.inflow,
+        features.outflow,
+        features.count,
+        features.active_windows,
+        features.peak_window_outflow,
+    ))
 }
 
 // Checks supplied event data and its path against the consensus commitment.
@@ -595,6 +747,13 @@ fn set_tamper(ctx: &mut _, amount: u64) -> LyquidResult<bool> {
     Ok(true)
 }
 
+// Demo-only fault injection for the historical-feature quorum path.
+#[method::instance(export = eth)]
+fn set_feature_tamper(ctx: &mut _, amount: u64) -> LyquidResult<bool> {
+    *ctx.instance.feature_tamper_amount.write() = amount;
+    Ok(true)
+}
+
 // Diagnostic read-back of the per-node fault-injection knob.
 #[method::instance(export = eth)]
 fn tamper_state(ctx: &_) -> LyquidResult<u64> {
@@ -715,6 +874,101 @@ fn q_balance(ctx: &_, response: LyquidResult<IndexAnswer>) -> LyquidResult<Optio
     Ok(None)
 }
 
+// UPC selection for historical feature recomputation.
+#[method::instance(upc(prepare))]
+fn q_features(ctx: &_) -> LyquidResult<Vec<NodeID>> {
+    if ctx.network.indexers.is_empty() {
+        return Err(LyquidError::LyquidRuntime(
+            "no indexers configured for UPC queries".into(),
+        ));
+    }
+    ctx.cache
+        .set(FeatureTally::new(ctx.network.indexers.len() as u32));
+    Ok(ctx.network.indexers.clone())
+}
+
+// Each node reads its private per-window index, while anchoring the answer to the consensus
+// commitment-chain root at the requested range endpoint.
+#[method::instance(upc(request))]
+fn q_features(
+    ctx: &mut _,
+    account: Address,
+    first_window: u64,
+    last_window: u64,
+) -> LyquidResult<FeatureAnswer> {
+    let end = feature_range_end(
+        *ctx.network.window_size,
+        first_window,
+        last_window,
+        &ctx.network.commits,
+        ctx.network.events.len(),
+    )
+    .ok_or_else(|| LyquidError::LyquidRuntime("range must contain sealed windows".into()))?;
+    if *ctx.instance.cursor.read() < end as u64 {
+        return Err(LyquidError::LyquidRuntime(
+            "local index is behind the requested range".into(),
+        ));
+    }
+    let commit = ctx
+        .network
+        .commits
+        .get(&last_window)
+        .copied()
+        .ok_or_else(|| LyquidError::LyquidRuntime("missing range-end commitment".into()))?;
+    let mut features = features_from_windows(
+        &ctx.instance.window_agg.read(),
+        account,
+        first_window,
+        last_window,
+    );
+    let tamper = *ctx.instance.feature_tamper_amount.read();
+    features.peak_window_outflow = features.peak_window_outflow.saturating_add(tamper);
+    Ok(FeatureAnswer {
+        responder: ctx.node_id,
+        first_window,
+        last_window,
+        end_chain_root: commit.chain_root,
+        features,
+        tampered: tamper != 0,
+        agreeing: 1,
+        total: 1,
+        divergent: String::new(),
+    })
+}
+
+#[method::instance(upc(response))]
+fn q_features(
+    ctx: &_,
+    response: LyquidResult<FeatureAnswer>,
+) -> LyquidResult<Option<FeatureAnswer>> {
+    let tally = ctx.cache.get_mut_or_init(|| FeatureTally::new(0));
+    if tally
+        .answers
+        .iter()
+        .any(|answer| answer.responder == ctx.from)
+        || tally.failed.contains(&ctx.from)
+    {
+        return Ok(None);
+    }
+    match response {
+        Ok(mut answer) => {
+            answer.responder = ctx.from;
+            tally.answers.push(answer);
+        }
+        Err(err) => {
+            lyquid::println!(
+                "LyquidIndex: feature UPC responder {} failed: {err}",
+                ctx.from
+            );
+            tally.failed.push(ctx.from);
+        }
+    }
+    if tally.ready() {
+        return Ok(Some(tally.verdict()));
+    }
+    Ok(None)
+}
+
 // Client-facing verified balance: UPC fan-out plus majority verdict.
 //
 // Returns `(agreed, inflow, outflow, count, agreeing, total, divergent_nodes)`.
@@ -747,6 +1001,65 @@ fn verified_balance(
     ))
 }
 
+// Client-facing historical analytics attestation.
+//
+// Returns `(agreed, inflow, outflow, events, active_windows, peak_window_outflow,
+// agreeing, total, divergent_nodes)`. The feature vector is returned only when a strict
+// majority reports the requested range and its consensus commitment-chain endpoint.
+#[method::instance(export = eth)]
+fn verified_flow_features(
+    ctx: &mut _,
+    account: Address,
+    first_window: u64,
+    last_window: u64,
+) -> LyquidResult<(bool, u64, u64, u64, u64, u64, u32, u32, String)> {
+    let expected_root = ctx
+        .network
+        .commits
+        .get(&last_window)
+        .map(|commit| commit.chain_root)
+        .ok_or_else(|| LyquidError::LyquidRuntime("range must end at a sealed window".into()))?;
+    if feature_range_end(
+        *ctx.network.window_size,
+        first_window,
+        last_window,
+        &ctx.network.commits,
+        ctx.network.events.len(),
+    )
+    .is_none()
+    {
+        return Err(LyquidError::LyquidRuntime(
+            "range must contain sealed windows".into(),
+        ));
+    }
+    let lyquid_id = ctx.lyquid_id;
+    let verdict = upc!((lyquid_id).q_features(
+        account: Address = account,
+        first_window: u64 = first_window,
+        last_window: u64 = last_window
+    ) -> (c: FeatureAnswer))?;
+    let strict_majority = verdict.c.agreeing > verdict.c.total / 2;
+    let bound = verdict.c.first_window == first_window
+        && verdict.c.last_window == last_window
+        && verdict.c.end_chain_root == expected_root;
+    let features = if strict_majority && bound {
+        verdict.c.features
+    } else {
+        FlowFeatures::default()
+    };
+    Ok((
+        strict_majority && bound && verdict.c.agreeing == verdict.c.total,
+        features.inflow,
+        features.outflow,
+        features.count,
+        features.active_windows,
+        features.peak_window_outflow,
+        verdict.c.agreeing,
+        verdict.c.total,
+        verdict.c.divergent,
+    ))
+}
+
 // Returns how many disputes have been recorded for one window.
 #[method::instance(export = eth)]
 fn dispute_count(ctx: &_, window_id: u64) -> LyquidResult<u64> {
@@ -760,6 +1073,43 @@ fn dispute_count(ctx: &_, window_id: u64) -> LyquidResult<u64> {
 fn sealed_end(size: u64, window_id: u64, len: usize) -> Option<usize> {
     let end = window_id.checked_add(1)?.checked_mul(size)?;
     (end <= len as u64).then_some(end as usize)
+}
+
+fn feature_range_end(
+    size: u64,
+    first_window: u64,
+    last_window: u64,
+    commits: &HashMap<u64, WindowCommit>,
+    len: usize,
+) -> Option<usize> {
+    (first_window <= last_window
+        && commits.contains_key(&first_window)
+        && commits.contains_key(&last_window))
+    .then_some(())?;
+    sealed_end(size, last_window, len)
+}
+
+fn features_from_windows(
+    window_agg: &HashMap<u64, HashMap<Address, AccountAgg>>,
+    account: Address,
+    first_window: u64,
+    last_window: u64,
+) -> FlowFeatures {
+    let mut features = FlowFeatures::default();
+    for window_id in first_window..=last_window {
+        let Some(per_account) = window_agg.get(&window_id) else {
+            continue;
+        };
+        let entry = per_account.get(&account).copied().unwrap_or_default();
+        features.inflow = features.inflow.saturating_add(entry.inflow);
+        features.outflow = features.outflow.saturating_add(entry.outflow);
+        features.count += entry.count;
+        if entry.count > 0 {
+            features.active_windows += 1;
+            features.peak_window_outflow = features.peak_window_outflow.max(entry.outflow);
+        }
+    }
+    features
 }
 
 fn fold_account(events: &[EventRecord], account: Address) -> (u64, u64, u64) {
@@ -926,5 +1276,95 @@ mod tests {
         assert!(verdict.divergent.contains(&bad.to_string()));
         assert!(verdict.flagged.contains(&bad.to_string()));
         assert!(!verdict.divergent.contains(&good_a.to_string()));
+    }
+
+    #[lyquid_test::test]
+    fn window_features_preserve_range_boundaries_and_temporal_peaks() {
+        let account = Address::repeat_byte(0x44);
+        let mut windows = new_hashmap();
+        let mut first = new_hashmap();
+        first.insert(
+            account,
+            AccountAgg {
+                inflow: 10,
+                outflow: 2,
+                count: 2,
+                last_seq: 1,
+            },
+        );
+        let mut second = new_hashmap();
+        second.insert(
+            account,
+            AccountAgg {
+                inflow: 0,
+                outflow: 30,
+                count: 1,
+                last_seq: 5,
+            },
+        );
+        windows.insert(0, first);
+        windows.insert(1, second);
+
+        assert_eq!(
+            features_from_windows(&windows, account, 0, 1),
+            FlowFeatures {
+                inflow: 10,
+                outflow: 32,
+                count: 3,
+                active_windows: 2,
+                peak_window_outflow: 30,
+            }
+        );
+        assert_eq!(
+            features_from_windows(&windows, account, 1, 1),
+            FlowFeatures {
+                inflow: 0,
+                outflow: 30,
+                count: 1,
+                active_windows: 1,
+                peak_window_outflow: 30,
+            }
+        );
+    }
+
+    #[lyquid_test::test]
+    fn feature_verdict_requires_a_strict_majority_and_names_the_outlier() {
+        let root = hash_leaf(b"range end");
+        let features = FlowFeatures {
+            inflow: 50,
+            outflow: 70,
+            count: 4,
+            active_windows: 2,
+            peak_window_outflow: 60,
+        };
+        let bad = NodeID::from([0x09; 32]);
+        let mut tally = FeatureTally::new(3);
+        for responder in [NodeID::from([0x07; 32]), NodeID::from([0x08; 32])] {
+            tally.answers.push(FeatureAnswer {
+                responder,
+                first_window: 0,
+                last_window: 1,
+                end_chain_root: root,
+                features,
+                ..FeatureAnswer::default()
+            });
+        }
+        tally.answers.push(FeatureAnswer {
+            responder: bad,
+            first_window: 0,
+            last_window: 1,
+            end_chain_root: root,
+            features: FlowFeatures {
+                peak_window_outflow: 999,
+                ..features
+            },
+            tampered: true,
+            ..FeatureAnswer::default()
+        });
+        let verdict = tally.verdict();
+        assert_eq!(verdict.features, features);
+        assert_eq!(verdict.agreeing, 2);
+        assert_eq!(verdict.total, 3);
+        assert!(verdict.divergent.contains(&bad.to_string()));
     }
 }

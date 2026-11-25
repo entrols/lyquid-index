@@ -28,6 +28,12 @@ historical account-flow index whose answers can be *independently falsified*:
    window W" is a uniquely addressable object. `dispute(W, claimed_root)` pins an
    accusation to that coordinate; the head of the commitment chain is never rewritten.
 
+4. **Bounded historical features** — `verified_flow_features` asks every indexer to
+   recompute an account's inflow, outflow, event count, active-window count, and peak
+   per-window outflow across a requested sealed range. The answer is bound to the
+   commitment-chain root at the range endpoint, so it cannot be reused for another
+   historical prefix.
+
 ## Directory layout
 
 ```
@@ -35,7 +41,7 @@ Cargo.toml            lyquid 0.8.4 (feature "ldk"), serde/serde_json; dev-dep ly
 build.rs              exports __stack_pointer for the wasm guest
 rust-toolchain.toml   channel 1.99.0, target wasm32-unknown-unknown
 .cargo/config.toml    default build target = wasm32
-src/lib.rs            the Lyquid: 5 network + 15 instance methods, UPC 3-stage query
+src/lib.rs            the Lyquid: 5 network + 18 instance methods, UPC 3-stage queries
 src/merkle.rs         domain-separated blake3 Merkle tree + seal() + chain_next()
 docs/e2e-result.txt   transcript of the four-node devnet experiment (raw evidence)
 ```
@@ -125,9 +131,10 @@ export PRIVATE_KEY=<funded-local-deployer-key>
 bash scripts/e2e.sh "$RPC1" "$NODE1" "$RPC2" "$NODE2" "$RPC3" "$NODE3" "$RPC4" "$NODE4"
 ```
 
-A passing run prints `PASS` after checking historical totals, 4/4 agreement,
-3/4 agreement with one modified response, inclusion proof acceptance and
-rejection, and a dispute that preserves the commitment head. The previous
+A passing run prints `PASS` after checking a bounded historical feature vector with
+4/4 agreement, 3/4 agreement after one modified feature response, historical totals,
+balance divergence, inclusion proof acceptance and rejection, and a dispute that
+preserves the commitment head. The previous
 run in `docs/e2e-result.txt` used a different fixture.
 
 `get_balance` reads the live local aggregate. `historical_balance` replays through
@@ -136,9 +143,16 @@ window, returning zero totals when there is no strict majority. Check
 `agreeing > total / 2` before consuming totals. `agreed` means unanimity.
 Only complete windows with canonical roots can be sealed.
 
+`flow_features(account, first_window, last_window)` reads a node's private
+per-account/per-window index over an inclusive sealed range.
+`verified_flow_features` returns the same five figures only if a strict UPC majority
+reports the requested range and the consensus chain root at `last_window`; it reports
+zero figures with no majority. This demonstrates a composable historical input rather
+than a spot oracle value.
+
 ### Calling convention (important)
 
-Mutable **instance** methods (`set_tamper`) must be invoked with `cast call`
+Mutable **instance** methods (`set_tamper`, `set_feature_tamper`) must be invoked with `cast call`
 (eth_call), **not** `cast send`. A sequenced transaction commits network state only;
 the per-node instance write is applied by the node that serves the call. `cast send`
 returns a successful receipt and silently drops the write. Network methods
@@ -148,17 +162,19 @@ Node IDs are RFC4648 lowercase base32 (`Node-` prefix, 35 bytes = 32 id + 2 chec
 1 version byte); `configure_indexers` takes them as `bytes32[]`, i.e. the first 32
 bytes of the base32 decoding.
 
-## Recorded results from the earlier four-node localnet run
+## Recorded results for the historical range release
 
 | Check | Result |
 | --- | --- |
-| Native algorithm assertions | 19 / 19 |
-| Guest unit tests (`shaker test`) | 6 / 6 |
-| Honest query: `agreed`, `agreeing/total` | true, 4 / 4 |
-| Query after tampering node 2 only | `agreed=false`, 3 / 4, divergent = node 2 |
-| `self_check` (audit-path re-verification) | 12 checked, 0 failures |
-| `dispute(2, wrong_root)` | `dispute_count(2) = 1`; control window 1 stays 0 |
-| UPC round-trip latency | 68–183 ms for 4 nodes |
+| Guest unit tests | 9 passed, 0 failed |
+| Fresh four-node deployments | Two distinct contracts, identical end-to-end test output |
+| Range [0, 2] | 96 in, 102 out, 12 events, 3 active windows, peak outflow 42 |
+| Range quorum under a simulated peak outflow fault | 3 / 4, node 2 identified, majority peak remains 42 |
+| Individual proof and dispute recording | Original amount accepted, changed amount rejected, commitment head unchanged |
+
+The [first run](docs/interval-reproduction/e2e-1.log), [second run](docs/interval-reproduction/e2e-2.log)
+and [guest tests](docs/interval-guest-test.log) are from this release. Earlier baseline runs are
+retained in `docs/e2e-result.txt` and `docs/latest-e2e.log`.
 
 ## Known limitations
 
@@ -166,4 +182,6 @@ bytes of the base32 decoding.
 - Divergence is demonstrated via a per-node fault-injection knob, not organic drift.
 - Aggregates and roots are compared; an uncovered individual leaf could still differ.
 - The recorded test used four loopback nodes. Wide-area latency and restart recovery remain unmeasured.
-- Historical queries replay the full sealed prefix. The Merkle proof authenticates an individual event. Aggregate correctness still relies on recomputation and the UPC quorum.
+- Historical balance queries replay the full sealed prefix; bounded feature queries use
+  private per-window aggregates. The Merkle proof authenticates an individual event.
+  Aggregate correctness still relies on recomputation and the UPC quorum.

@@ -1,0 +1,22 @@
+   Compiling lyquid-index v0.1.0 (/mnt/e/CityuStudy/blockchain/project/lyquid-index)
+warning: unstable feature specified for `-Ctarget-feature`: `atomics`
+  |
+  = note: this feature is not stably supported; its behavior can change in the future
+
+warning: `lyquid-index` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.84s
+     Running unittests src/lib.rs (lyquid_tools_target/wasm32-unknown-unknown/debug/deps/lyquid_index-ba6437150e13fcd4.wasm)
+
+running 9 tests
+test lyquid_index::tests::verdict_excludes_wrong_commitments_and_requires_strict_majority  ... ok
+test lyquid_index::tests::wrong_sibling_breaks_the_proof                                   ... ok
+test lyquid_index::tests::empty_window_has_zero_root                                       ... ok
+test lyquid_index::tests::index_folds_events_into_windows_deterministically                ... ok
+test lyquid_index::tests::commitment_chain_is_order_sensitive                              ... ok
+test lyquid_index::tests::window_features_preserve_range_boundaries_and_temporal_peaks     ... ok
+test lyquid_index::tests::feature_verdict_requires_a_strict_majority_and_names_the_outlier ... ok
+test lyquid_index::tests::verdict_reports_divergent_and_flagged_nodes                      ... ok
+test lyquid_index::tests::every_leaf_proves_against_its_root_for_sizes_one_to_nine         ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.75s
+

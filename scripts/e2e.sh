@@ -63,6 +63,30 @@ expect "$(number "${history[0]}")" 24
 expect "$(number "${history[1]}")" 26
 expect "$(number "${history[2]}")" 4
 
+features='verified_flow_features(address,uint64,uint64)(bool,uint64,uint64,uint64,uint64,uint64,uint32,uint32,string)'
+check_features() {
+    local output
+    output=$(read_node 0 "$features" "$account" 0 2)
+    local -a answer
+    mapfile -t answer <<< "$output"
+    expect "${answer[0]}" "$1"
+    expect "$(number "${answer[1]}")" 96
+    expect "$(number "${answer[2]}")" 102
+    expect "$(number "${answer[3]}")" 12
+    expect "$(number "${answer[4]}")" 3
+    expect "$(number "${answer[5]}")" 42
+    expect "$(number "${answer[6]}")" "$2"
+    expect "$(number "${answer[7]}")" 4
+    if [[ $1 == false ]]; then
+        [[ "${answer[8]}" =~ ^\"?Node-[[:alnum:]]+\"?$ ]]
+    fi
+    printf '%s\n' "$output"
+}
+check_features true 4
+read_node 1 'set_feature_tamper(uint64)(bool)' 500 >/dev/null
+trap 'read_node 1 "set_tamper(uint64)(bool)" 0 >/dev/null || true; read_node 1 "set_feature_tamper(uint64)(bool)" 0 >/dev/null || true' EXIT
+check_features false 3
+
 balance='verified_balance(address)(bool,uint64,uint64,uint64,uint32,uint32,string)'
 check_balance() {
     local output
@@ -82,7 +106,6 @@ check_balance() {
 }
 check_balance true 4
 read_node 1 'set_tamper(uint64)(bool)' 500 >/dev/null
-trap 'read_node 1 "set_tamper(uint64)(bool)" 0 >/dev/null || true' EXIT
 check_balance false 3
 
 # ABI words: root, count, index, array offset, array length, then two siblings.
@@ -98,4 +121,4 @@ send 'dispute(uint64,bytes32)' 2 "0x$(printf '%064d' 0)"
 wait_for_number 1 0 'dispute_count(uint64)(uint64)' 2
 expect "$(number "$(read_node 0 'dispute_count(uint64)(uint64)' 1)")" 0
 expect "$(read_node 0 'commitment_head()')" "$head"
-echo 'PASS: historical totals, UPC divergence, anchored proof and dispute'
+echo 'PASS: historical features, UPC divergence, anchored proof and dispute'
